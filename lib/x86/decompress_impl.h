@@ -11,7 +11,11 @@
 #  define ATTRIBUTES	__attribute__((target("bmi2")))
 #  define DISPATCH	1
 #  define DISPATCH_BMI2	1
+#ifdef GDEFLATE
+#  include "../gdeflate_decompress_template.h"
+#else
 #  include "../decompress_template.h"
+#endif
 #endif
 
 #ifdef DISPATCH

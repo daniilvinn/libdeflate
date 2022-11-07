@@ -25,6 +25,9 @@
  * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
+ *
+ * SPDX-FileCopyrightText: Copyright (c) 2020, 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "deflate_compress.h"
@@ -50,15 +53,36 @@
  */
 #define USE_FULL_OFFSET_SLOT_FAST	SUPPORT_NEAR_OPTIMAL_PARSING
 
+#ifdef DEFLATE64
+/*
+ * DEFLATE64 uses a 65536 byte sliding window; set the matchfinder parameters
+ * appropriately.
+ */
+#define MATCHFINDER_WINDOW_ORDER	16
+
+/* TODO: condensed map is not supported in deflate64 mode */
+#undef USE_FULL_OFFSET_SLOT_FAST
+#define USE_FULL_OFFSET_SLOT_FAST 1
+#else
 /*
  * DEFLATE uses a 32768 byte sliding window; set the matchfinder parameters
  * appropriately.
  */
 #define MATCHFINDER_WINDOW_ORDER	15
+#endif
 
 #include "hc_matchfinder.h"
 #if SUPPORT_NEAR_OPTIMAL_PARSING
 #  include "bt_matchfinder.h"
+#endif
+
+/*
+ * Use wider type for LZ-item in deflate64 mode.
+ */
+#ifdef DEFLATE64
+typedef u64 lz_item_t;
+#else
+typedef u32 lz_item_t;
 #endif
 
 /*
@@ -120,7 +144,12 @@ static const unsigned deflate_length_slot_base[] = {
 	3   , 4   , 5   , 6   , 7   , 8   , 9   , 10  ,
 	11  , 13  , 15  , 17  , 19  , 23  , 27  , 31  ,
 	35  , 43  , 51  , 59  , 67  , 83  , 99  , 115 ,
-	131 , 163 , 195 , 227 , 258 ,
+	131 , 163 , 195 , 227 ,
+#ifndef DEFLATE64
+	258 ,
+#else
+	3   ,
+#endif
 };
 
 /* Table: length slot => number of extra length bits  */
@@ -128,7 +157,12 @@ static const u8 deflate_extra_length_bits[] = {
 	0   , 0   , 0   , 0   , 0   , 0   , 0   , 0 ,
 	1   , 1   , 1   , 1   , 2   , 2   , 2   , 2 ,
 	3   , 3   , 3   , 3   , 4   , 4   , 4   , 4 ,
-	5   , 5   , 5   , 5   , 0   ,
+	5   , 5   , 5   , 5   ,
+#ifndef DEFLATE64
+	0   ,
+#else
+	16  ,
+#endif
 };
 
 /* Table: offset slot => offset slot base value  */
@@ -137,6 +171,9 @@ static const unsigned deflate_offset_slot_base[] = {
 	17   , 25   , 33   , 49    , 65    , 97    , 129   , 193   ,
 	257  , 385  , 513  , 769   , 1025  , 1537  , 2049  , 3073  ,
 	4097 , 6145 , 8193 , 12289 , 16385 , 24577 ,
+#ifdef DEFLATE64
+	32769, 49153
+#endif
 };
 
 /* Table: offset slot => number of extra offset bits  */
@@ -145,26 +182,14 @@ static const u8 deflate_extra_offset_bits[] = {
 	3    , 3    , 4    , 4     , 5     , 5     , 6     , 6     ,
 	7    , 7    , 8    , 8     , 9     , 9     , 10    , 10    ,
 	11   , 11   , 12   , 12    , 13    , 13    ,
+#ifdef DEFLATE64
+	14   , 14
+#endif
 };
 
 /* Table: length => length slot  */
-static const u8 deflate_length_slot[DEFLATE_MAX_MATCH_LEN + 1] = {
-	0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 12,
-	12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15, 16, 16, 16, 16, 16,
-	16, 16, 16, 17, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 18,
-	18, 19, 19, 19, 19, 19, 19, 19, 19, 20, 20, 20, 20, 20, 20, 20, 20, 20,
-	20, 20, 20, 20, 20, 20, 20, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21,
-	21, 21, 21, 21, 21, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-	22, 22, 22, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23,
-	23, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
-	24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 25, 25, 25,
-	25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25,
-	25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 26, 26, 26, 26, 26, 26, 26,
-	26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
-	26, 26, 26, 26, 26, 26, 26, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27,
-	27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27,
-	27, 27, 28,
-};
+static u8 deflate_length_slot[DEFLATE_MAX_MATCH_LEN + 1] = { 0 };
+static u8 deflate_length_slot_inited = 0;
 
 /* The order in which precode codeword lengths are stored */
 static const u8 deflate_precode_lens_permutation[DEFLATE_NUM_PRECODE_SYMS] = {
@@ -249,8 +274,10 @@ struct deflate_sequence {
 	 *
 	 * Bits 23..31: the length of the match which follows the literals, or 0
 	 * if this literal run was the last in the block, so there is no match
-	 * which follows it.  */
-	u32 litrunlen_and_length;
+	 * which follows it.
+	 * In deflate64 mode, bits starting from bit 23 will hold the match length
+	 * value.  */
+	lz_item_t litrunlen_and_length;
 
 	/* If 'length' doesn't indicate end-of-block, then this is the offset of
 	 * the match which follows the literals.  */
@@ -300,9 +327,13 @@ struct deflate_optimum_node {
 	 *	The high bits of 'item' are the actual literal byte if this is a
 	 *	literal, or the match offset if this is a match.
 	 */
+#ifdef DEFLATE64
+#define OPTIMUM_OFFSET_SHIFT 17
+#else
 #define OPTIMUM_OFFSET_SHIFT 9
-#define OPTIMUM_LEN_MASK (((u32)1 << OPTIMUM_OFFSET_SHIFT) - 1)
-	u32 item;
+#endif
+#define OPTIMUM_LEN_MASK (((lz_item_t)1 << OPTIMUM_OFFSET_SHIFT) - 1)
+	lz_item_t item;
 
 };
 
@@ -455,6 +486,7 @@ struct libdeflate_compressor {
 	} p; /* (p)arser */
 };
 
+#ifndef GDEFLATE
 /*
  * The type for the bitbuffer variable, which temporarily holds bits that are
  * being packed into bytes and written to the output buffer.  For best
@@ -572,6 +604,200 @@ deflate_flush_output(struct deflate_output_bitstream *os)
 
 	return os->next - os->begin;
 }
+
+/* Nothing to do. */
+static void
+gdeflate_reset(struct deflate_output_bitstream *os)
+{}
+
+/* Nothing to do. */
+static unsigned
+gdeflate_advance(struct deflate_output_bitstream *os)
+{
+	return 0;
+}
+
+#else
+
+/*
+ * The type for the bitbuffer variable, which temporarily holds bits that are
+ * being packed into bytes and written to the output buffer. For GDEFLATE it
+ * has to be at least 64-bits long.
+ */
+typedef u64 bitbuf_t;
+#define BITBUF_NBITS	(8 * sizeof(bitbuf_t))
+
+/* Can the specified number of bits always be added to 'bitbuf' after any
+ * pending bytes have been flushed?  */
+#define CAN_BUFFER(n)	(true)
+
+/*
+ * Structure to keep track of the current state of sending bits to the
+ * compressed output buffer.
+ */
+struct deflate_output_bitstream {
+
+	/* Bits that haven't yet been written to the output buffer.  */
+	bitbuf_t bitbuf[NUM_STREAMS];
+
+	/* Number of bits currently held in @bitbuf.  */
+	int bitcount[NUM_STREAMS];
+
+	/* Write pointer for current bit-packet.  */
+	u8* write_ptr[NUM_STREAMS];
+
+	/* Write pointer for next bit-packet.  */
+	u8* next_ptr[NUM_STREAMS];
+
+	/* The number of bits "read" from stream.
+	 * Used to emulate GDeflate reading pattern.  */
+	unsigned input_bitcount[NUM_STREAMS];
+
+	/* Current GDeflate stream index.  */
+	u8 idx;
+
+	/* Pointer to the beginning of the output buffer.  */
+	u8 *begin;
+
+	/* Pointer to the position in the output buffer at which the next byte
+	 * should be written.  */
+	u8 *next;
+
+	/* Pointer just past the end of the output buffer.  */
+	u8 *end;
+};
+
+/*
+ * OUTPUT_END_PADDING is the size, in bytes, of the extra space that must be
+ * present following os->end, in order to not overrun the buffer when generating
+ * output.  When UNALIGNED_ACCESS_IS_FAST, we need at least sizeof(bitbuf_t)
+ * bytes for put_unaligned_leword().  Otherwise we need only 1 byte.  However,
+ * to make the compression algorithm produce the same result on all CPU
+ * architectures (which is sometimes desirable), we have to unconditionally use
+ * the maximum for any CPU, which is sizeof(bitbuf_t) == 8.
+ */
+#define OUTPUT_END_PADDING	8
+
+/* Initialize the output bitstream.  'size' is assumed to be at least
+ * OUTPUT_END_PADDING.  */
+static void
+deflate_init_output(struct deflate_output_bitstream *os,
+		    void *buffer, size_t size)
+{
+	memset(os->bitbuf, 0, sizeof(os->bitbuf));
+	memset(os->bitcount, 0, sizeof(os->bitcount));
+	os->idx = 0;
+	os->begin = buffer;
+	os->next = os->begin;
+	os->end = os->begin + size - OUTPUT_END_PADDING;
+
+	for (unsigned n = 0; n < NUM_STREAMS; n++) {
+		os->write_ptr[n] = os->next;
+		os->next += BITS_PER_PACKET/8;
+
+		/* Clear the output.  */
+		put_unaligned_le32(0, os->write_ptr[os->idx]);
+
+		/* The next write position is not known yet.  */
+		os->next_ptr[n] = NULL;
+
+		/* GDeflate starts with a bit packet in each lane.  */
+		os->input_bitcount[n] = BITS_PER_PACKET;
+	}
+}
+
+/* Flush a GDeflate packet from the bitbuffer variable to the output buffer.  */
+static forceinline void
+gdeflate_flush_bitpacket(struct deflate_output_bitstream *os)
+{
+	put_unaligned_le32((u32)os->bitbuf[os->idx], os->write_ptr[os->idx]);
+
+	os->bitbuf[os->idx] >>= BITS_PER_PACKET;
+	os->bitcount[os->idx] -= BITS_PER_PACKET;
+
+	/* Advance the write pointer.  */
+	os->write_ptr[os->idx] = os->next_ptr[os->idx];
+	os->next_ptr[os->idx] = NULL;
+}
+
+/* Add some bits to the bitbuffer variable of the output bitstream.  The caller
+ * must make sure there is enough room.  */
+static forceinline void
+deflate_add_bits(struct deflate_output_bitstream *os,
+		 const bitbuf_t bits, const unsigned num_bits)
+{
+	os->bitbuf[os->idx] |= bits << os->bitcount[os->idx];
+	os->bitcount[os->idx] += num_bits;
+
+	/* Emulate the number of input bits.  */
+	os->input_bitcount[os->idx] -= num_bits;
+
+	/* Accumulated more than a watermark - flush a bit packet.  */
+	if (os->bitcount[os->idx] >= LOW_WATERMARK_BITS)
+		gdeflate_flush_bitpacket(os);
+
+	/* If the emulated input has less than a watermark bits
+	 * it is time to reserve the next write pointer.  */
+	if (os->input_bitcount[os->idx] < LOW_WATERMARK_BITS &&
+	    os->next_ptr[os->idx] == NULL) {
+		os->next_ptr[os->idx] = os->next;
+		os->next += BITS_PER_PACKET/8;
+
+		/* Clear.  */
+		put_unaligned_le32(0, os->next_ptr[os->idx]);
+
+		/* Bump the input bitcount. */
+		os->input_bitcount[os->idx] += BITS_PER_PACKET;
+	}
+}
+
+/*
+ * Flush bits from the bitbuffer variable to the output buffer.
+ * Nothing to do in GDeflate mode.
+*/
+static forceinline void
+deflate_flush_bits(struct deflate_output_bitstream *os)
+{}
+
+/* Nothing to do. GDeflate bitstreams are not aligned. */
+static forceinline void
+deflate_align_bitstream(struct deflate_output_bitstream *os)
+{}
+
+/* Reset GDeflate's stream index.  */
+static void
+gdeflate_reset(struct deflate_output_bitstream *os)
+{
+	os->idx = 0;
+}
+
+/* Advance GDeflate's stream index. Returns the carry over.  */
+static forceinline unsigned
+gdeflate_advance(struct deflate_output_bitstream *os)
+{
+	os->idx = (os->idx + 1)%NUM_STREAMS;
+	return os->idx == 0 ? 1 : 0;
+}
+
+/*
+ * Flush any remaining bits to the output buffer if needed.  Return the total
+ * number of bytes written to the output buffer, or 0 if an overflow occurred.
+ */
+static size_t
+deflate_flush_output(struct deflate_output_bitstream *os)
+{
+	if (os->next == os->end) /* overflow?  */
+		return 0;
+
+	for (int n = 0; n < NUM_STREAMS; n++) {
+		gdeflate_flush_bitpacket(os);
+		gdeflate_advance(os);
+	}
+
+	return os->next - os->begin;
+}
+
+#endif
 
 /* Given the binary tree node A[subtree_idx] whose children already
  * satisfy the maxheap property, swap the node with its greater child
@@ -1266,6 +1492,7 @@ static void
 deflate_write_block_header(struct deflate_output_bitstream *os,
 			   bool is_final_block, unsigned block_type)
 {
+	gdeflate_reset(os);
 	deflate_add_bits(os, is_final_block, 1);
 	deflate_add_bits(os, block_type, 2);
 	deflate_flush_bits(os);
@@ -1427,6 +1654,8 @@ deflate_write_huffman_header(struct libdeflate_compressor *c,
 {
 	unsigned i;
 
+	gdeflate_reset(os);
+
 	deflate_add_bits(os, c->num_litlen_syms - 257, 5);
 	deflate_add_bits(os, c->num_offset_syms - 1, 5);
 	deflate_add_bits(os, c->num_explicit_lens - 4, 4);
@@ -1436,8 +1665,11 @@ deflate_write_huffman_header(struct libdeflate_compressor *c,
 	for (i = 0; i < c->num_explicit_lens; i++) {
 		deflate_add_bits(os, c->precode_lens[
 				       deflate_precode_lens_permutation[i]], 3);
+		gdeflate_advance(os);
 		deflate_flush_bits(os);
 	}
+
+	gdeflate_reset(os);
 
 	/* Output the encoded lengths of the codewords in the larger code.  */
 	for (i = 0; i < c->num_precode_items; i++) {
@@ -1454,9 +1686,157 @@ deflate_write_huffman_header(struct libdeflate_compressor *c,
 				deflate_add_bits(os, precode_item >> 5, 7);
 		}
 		STATIC_ASSERT(CAN_BUFFER(DEFLATE_MAX_PRE_CODEWORD_LEN + 7));
+		gdeflate_advance(os);
 		deflate_flush_bits(os);
 	}
 }
+
+/* Output the end-of-block symbol.  */
+static void
+deflate_write_end_of_block(struct deflate_output_bitstream *os,
+			   const struct deflate_codes *codes)
+{
+	deflate_add_bits(os, codes->codewords.litlen[DEFLATE_END_OF_BLOCK],
+			 codes->lens.litlen[DEFLATE_END_OF_BLOCK]);
+	deflate_flush_bits(os);
+}
+
+#ifdef GDEFLATE
+
+/* GDeflate deferred copy.  */
+struct gdeflate_deferred_copy {
+	unsigned round;
+	unsigned offset_bits;
+	unsigned offset_bitcount;
+};
+
+/* Initilizes a deferred copy.  */
+static void
+gdeflate_init_copy(struct gdeflate_deferred_copy * restrict copy,
+		   const struct deflate_codes * restrict codes,
+		   unsigned offset, unsigned offset_slot, unsigned round)
+{
+	copy->offset_bits = codes->codewords.offset[offset_slot];
+	copy->offset_bits |= (offset -
+		deflate_offset_slot_base[offset_slot]) <<
+			codes->lens.offset[offset_slot];
+	copy->offset_bitcount = codes->lens.offset[offset_slot] +
+		deflate_extra_offset_bits[offset_slot];
+
+	copy->round = round;
+}
+
+/* Write copies for the previous round.  */
+static unsigned
+gdeflate_write_prev_round_copies(struct deflate_output_bitstream * restrict os,
+				 struct gdeflate_deferred_copy * restrict copies,
+				 unsigned round)
+{
+	while (round > 1 && copies[os->idx].round == round - 1) {
+		copies[os->idx].round = 0;
+
+		deflate_add_bits(os, copies[os->idx].offset_bits,
+				 copies[os->idx].offset_bitcount);
+
+		round += gdeflate_advance(os);
+	}
+
+	return round;
+}
+
+/* Flush the tail copies. Will write prev and current round copies.  */
+static void
+gdeflate_write_tail_copies(struct deflate_output_bitstream * restrict os,
+			   struct gdeflate_deferred_copy * restrict copies,
+			   unsigned round)
+{
+	const unsigned split_point = os->idx % NUM_STREAMS;
+
+	/* Flush previous round copies. */
+	for (unsigned n = split_point; n < NUM_STREAMS; n++) {
+		if (round > 1 && copies[n].round == round - 1) {
+			os->idx = n;
+			deflate_add_bits(os, copies[n].offset_bits,
+					 copies[n].offset_bitcount);
+		}
+	}
+
+	/* Flush current round copies. */
+	for (unsigned n = 0; n < split_point; n++) {
+		if (copies[n].round == round) {
+			os->idx = n;
+			deflate_add_bits(os, copies[n].offset_bits,
+					 copies[n].offset_bitcount);
+		}
+	}
+}
+
+static void
+gdeflate_write_sequences(struct deflate_output_bitstream * restrict os,
+			 const struct deflate_codes * restrict codes,
+			 const struct deflate_sequence sequences[restrict],
+			 const u8 * restrict in_next)
+{
+	const struct deflate_sequence *seq = sequences;
+	struct gdeflate_deferred_copy copies[NUM_STREAMS] = {0};
+	unsigned round = 1;
+
+	gdeflate_reset(os);
+
+	for (;;) {
+		u32 litrunlen = seq->litrunlen_and_length & 0x7FFFFF;
+		unsigned length = (unsigned)(seq->litrunlen_and_length >> 23);
+		unsigned length_slot;
+		unsigned litlen_symbol;
+
+		if (litrunlen) {
+			do {
+				const unsigned lit = *in_next++;
+
+				round = gdeflate_write_prev_round_copies(os,
+									 copies,
+									 round);
+
+				deflate_add_bits(os, codes->codewords.litlen[lit],
+						 codes->lens.litlen[lit]);
+
+				round += gdeflate_advance(os);
+			} while (--litrunlen);
+		}
+
+		round = gdeflate_write_prev_round_copies(os, copies, round);
+
+		if (length == 0)
+			break;
+
+		in_next += length;
+
+		length_slot = seq->length_slot;
+		litlen_symbol = 257 + length_slot;
+
+		/* Litlen symbol  */
+		deflate_add_bits(os, codes->codewords.litlen[litlen_symbol],
+				 codes->lens.litlen[litlen_symbol]);
+
+		/* Extra length bits  */
+		deflate_add_bits(os, length - deflate_length_slot_base[length_slot],
+				 deflate_extra_length_bits[length_slot]);
+
+		/* Store offset bits for use later */
+		gdeflate_init_copy(copies + os->idx, codes, seq->offset,
+				   seq->offset_symbol, round);
+
+		round += gdeflate_advance(os);
+
+		seq++;
+	}
+
+	deflate_write_end_of_block(os, codes);
+	round += gdeflate_advance(os);
+
+	gdeflate_write_tail_copies(os, copies, round);
+}
+#endif
 
 static void
 deflate_write_sequences(struct deflate_output_bitstream * restrict os,
@@ -1464,11 +1844,14 @@ deflate_write_sequences(struct deflate_output_bitstream * restrict os,
 			const struct deflate_sequence sequences[restrict],
 			const u8 * restrict in_next)
 {
+#ifdef GDEFLATE
+	gdeflate_write_sequences(os, codes, sequences, in_next);
+#else
 	const struct deflate_sequence *seq = sequences;
 
 	for (;;) {
 		u32 litrunlen = seq->litrunlen_and_length & 0x7FFFFF;
-		unsigned length = seq->litrunlen_and_length >> 23;
+		unsigned length = (unsigned)(seq->litrunlen_and_length >> 23);
 		unsigned length_slot;
 		unsigned litlen_symbol;
 		unsigned offset_symbol;
@@ -1576,9 +1959,78 @@ deflate_write_sequences(struct deflate_output_bitstream * restrict os,
 
 		seq++;
 	}
+#endif /* GDEFLATE */
 }
 
 #if SUPPORT_NEAR_OPTIMAL_PARSING
+#ifdef GDEFLATE
+/*
+ * Follow the minimum-cost path in the graph of possible match/literal choices
+ * for the current block and write out the matches/literals using the specified
+ * Huffman codes.
+ *
+ * Note: this is slightly duplicated with deflate_write_sequences(), the reason
+ * being that we don't want to waste time translating between intermediate
+ * match/literal representations.
+ */
+static void
+gdeflate_write_item_list(struct deflate_output_bitstream *os,
+			 const struct deflate_codes *codes,
+			 struct libdeflate_compressor *c,
+			 u32 block_length)
+{
+	struct deflate_optimum_node *cur_node = &c->p.n.optimum_nodes[0];
+	struct deflate_optimum_node * const end_node = &c->p.n.optimum_nodes[block_length];
+	struct gdeflate_deferred_copy copies[NUM_STREAMS] = {0};
+	unsigned round = 1;
+
+	gdeflate_reset(os);
+
+	do {
+		unsigned length = cur_node->item & OPTIMUM_LEN_MASK;
+		unsigned offset = (unsigned)(cur_node->item >> OPTIMUM_OFFSET_SHIFT);
+		unsigned litlen_symbol;
+		unsigned length_slot;
+		unsigned offset_slot;
+
+		round = gdeflate_write_prev_round_copies(os, copies, round);
+
+		if (length == 1) {
+			/* Literal  */
+			litlen_symbol = offset;
+			deflate_add_bits(os, codes->codewords.litlen[litlen_symbol],
+					 codes->lens.litlen[litlen_symbol]);
+		} else {
+			/* Match length  */
+			length_slot = deflate_length_slot[length];
+			litlen_symbol = 257 + length_slot;
+			deflate_add_bits(os, codes->codewords.litlen[litlen_symbol],
+					 codes->lens.litlen[litlen_symbol]);
+
+			deflate_add_bits(os, length - deflate_length_slot_base[length_slot],
+					 deflate_extra_length_bits[length_slot]);
+
+			offset_slot = deflate_get_offset_slot(c, offset);
+
+			/* Store offset bits for use later */
+			gdeflate_init_copy(copies + os->idx, codes, offset,
+					offset_slot, round);
+		}
+
+		round += gdeflate_advance(os);
+
+		cur_node += length;
+	} while (cur_node != end_node);
+
+	round = gdeflate_write_prev_round_copies(os, copies, round);
+
+	deflate_write_end_of_block(os, codes);
+	round += gdeflate_advance(os);
+
+	gdeflate_write_tail_copies(os, copies, round);
+}
+#endif /* GDEFLATE */
+
 /*
  * Follow the minimum-cost path in the graph of possible match/literal choices
  * for the current block and write out the matches/literals using the specified
@@ -1594,11 +2046,14 @@ deflate_write_item_list(struct deflate_output_bitstream *os,
 			struct libdeflate_compressor *c,
 			u32 block_length)
 {
+#ifdef GDEFLATE
+	gdeflate_write_item_list(os, codes, c, block_length);
+#else
 	struct deflate_optimum_node *cur_node = &c->p.n.optimum_nodes[0];
 	struct deflate_optimum_node * const end_node = &c->p.n.optimum_nodes[block_length];
 	do {
 		unsigned length = cur_node->item & OPTIMUM_LEN_MASK;
-		unsigned offset = cur_node->item >> OPTIMUM_OFFSET_SHIFT;
+		unsigned offset = (unsigned)(cur_node->item >> OPTIMUM_OFFSET_SHIFT);
 		unsigned litlen_symbol;
 		unsigned length_slot;
 		unsigned offset_slot;
@@ -1642,18 +2097,9 @@ deflate_write_item_list(struct deflate_output_bitstream *os,
 		}
 		cur_node += length;
 	} while (cur_node != end_node);
+#endif /* GDEFLATE */
 }
 #endif /* SUPPORT_NEAR_OPTIMAL_PARSING */
-
-/* Output the end-of-block symbol.  */
-static void
-deflate_write_end_of_block(struct deflate_output_bitstream *os,
-			   const struct deflate_codes *codes)
-{
-	deflate_add_bits(os, codes->codewords.litlen[DEFLATE_END_OF_BLOCK],
-			 codes->lens.litlen[DEFLATE_END_OF_BLOCK]);
-	deflate_flush_bits(os);
-}
 
 static void
 deflate_write_uncompressed_block(struct deflate_output_bitstream *os,
@@ -1668,13 +2114,24 @@ deflate_write_uncompressed_block(struct deflate_output_bitstream *os,
 		os->next = os->end;
 		return;
 	}
-
+#ifndef GDEFLATE
 	put_unaligned_le16(len, os->next);
 	os->next += 2;
 	put_unaligned_le16(~len, os->next);
 	os->next += 2;
 	memcpy(os->next, data, len);
 	os->next += len;
+#else
+	deflate_add_bits(os, len, 16);
+
+	while (len) {
+		deflate_add_bits(os, *data, 8);
+		gdeflate_advance(os);
+
+		data++;
+		len--;
+	}
+#endif
 }
 
 static void
@@ -1760,8 +2217,14 @@ deflate_flush_block(struct libdeflate_compressor * restrict c,
 		static_cost += c->freqs.offset[sym] * (extra + 5);
 	}
 
+#ifdef GDEFLATE
+	uncompressed_cost = 0;
+#else
+	uncompressed_cost += (-(os->bitcount + 3) & 7) + 16;
+#endif
+
 	/* Compute the cost of using uncompressed blocks. */
-	uncompressed_cost += (-(os->bitcount + 3) & 7) + 32 +
+	uncompressed_cost += 16 +
 			     (40 * (DIV_ROUND_UP(block_length,
 						 UINT16_MAX) - 1)) +
 			     (8 * block_length);
@@ -1801,7 +2264,9 @@ deflate_flush_block(struct libdeflate_compressor * restrict c,
 	#endif
 			deflate_write_sequences(os, codes, c->p.g.sequences,
 						block_begin);
+	#ifndef GDEFLATE
 		deflate_write_end_of_block(os, codes);
+	#endif
 	}
 }
 
@@ -1825,7 +2290,7 @@ deflate_choose_match(struct libdeflate_compressor *c,
 	c->freqs.litlen[257 + length_slot]++;
 	c->freqs.offset[offset_slot]++;
 
-	seq->litrunlen_and_length = ((u32)length << 23) | *litrunlen_p;
+	seq->litrunlen_and_length = ((lz_item_t)length << 23) | *litrunlen_p;
 	seq->offset = offset;
 	seq->length_slot = length_slot;
 	seq->offset_symbol = offset_slot;
@@ -2220,7 +2685,7 @@ deflate_tally_item_list(struct libdeflate_compressor *c, u32 block_length)
 	struct deflate_optimum_node *end_node = &c->p.n.optimum_nodes[block_length];
 	do {
 		unsigned length = cur_node->item & OPTIMUM_LEN_MASK;
-		unsigned offset = cur_node->item >> OPTIMUM_OFFSET_SHIFT;
+		unsigned offset = (unsigned)(cur_node->item >> OPTIMUM_OFFSET_SHIFT);
 
 		if (length == 1) {
 			/* Literal  */
@@ -2391,7 +2856,7 @@ deflate_find_min_cost_path(struct libdeflate_compressor *c,
 		/* It's always possible to choose a literal.  */
 		best_cost_to_end = c->p.n.costs.literal[literal] +
 				   (cur_node + 1)->cost_to_end;
-		cur_node->item = ((u32)literal << OPTIMUM_OFFSET_SHIFT) | 1;
+		cur_node->item = ((lz_item_t)literal << OPTIMUM_OFFSET_SHIFT) | 1;
 
 		/* Also consider matches if there are any.  */
 		if (num_matches) {
@@ -2424,7 +2889,7 @@ deflate_find_min_cost_path(struct libdeflate_compressor *c,
 						      (cur_node + len)->cost_to_end;
 					if (cost_to_end < best_cost_to_end) {
 						best_cost_to_end = cost_to_end;
-						cur_node->item = ((u32)offset << OPTIMUM_OFFSET_SHIFT) | len;
+						cur_node->item = ((lz_item_t)offset << OPTIMUM_OFFSET_SHIFT) | len;
 					}
 				} while (++len <= match->length);
 			} while (++match != cache_ptr);
@@ -2685,6 +3150,40 @@ deflate_init_offset_slot_fast(struct libdeflate_compressor *c)
 	}
 }
 
+/* Initialize deflate_length_slot. */
+static void
+deflate_init_length_slot(void)
+{
+	unsigned length_slot;
+	unsigned length;
+	unsigned length_end;
+
+	if (deflate_length_slot_inited > 0)
+		return;
+
+	for (length_slot = 1;
+		length_slot < ARRAY_LEN(deflate_length_slot_base);
+		length_slot++)
+	{
+		length = deflate_length_slot_base[length_slot];
+		length_end = length + (1 << deflate_extra_length_bits[length_slot]);
+#ifdef DEFLATE64
+		/* the last slot is a special case in deflate64 */
+		if (length_slot == ARRAY_LEN(deflate_length_slot_base) - 1) {
+			length = 258;
+			length_end = DEFLATE_MAX_MATCH_LEN + 1;
+		}
+#endif
+		do {
+			deflate_length_slot[length] = length_slot;
+		} while (++length != length_end);
+	}
+
+	deflate_length_slot_inited = 1;
+}
+
+#ifndef HIDE_INTERFACE
+
 LIBDEFLATEEXPORT struct libdeflate_compressor * LIBDEFLATEAPI
 libdeflate_alloc_compressor(int compression_level)
 {
@@ -2802,6 +3301,7 @@ libdeflate_alloc_compressor(int compression_level)
 
 	deflate_init_offset_slot_fast(c);
 	deflate_init_static_codes(c);
+	deflate_init_length_slot();
 
 	return c;
 }
@@ -2850,5 +3350,11 @@ libdeflate_deflate_compress_bound(struct libdeflate_compressor *c,
 	 * and alignment to a byte boundary; 2 for LEN; and 2 for NLEN.
 	 */
 	size_t max_num_blocks = MAX(DIV_ROUND_UP(in_nbytes, MIN_BLOCK_LENGTH), 1);
-	return (5 * max_num_blocks) + in_nbytes + 1 + OUTPUT_END_PADDING;
+	return (5 * max_num_blocks) + in_nbytes + 1 + OUTPUT_END_PADDING
+#ifdef GDEFLATE
+		+ 2*(NUM_STREAMS*BITS_PER_PACKET)/8
+#endif
+		;
 }
+
+#endif

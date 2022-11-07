@@ -57,6 +57,10 @@ typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
+/* Concatenation macros */
+#define CONCAT2(x,y)	x##y
+#define CONCAT(x,y)	CONCAT2(x,y)
+
 /*
  * Word type of the target architecture.  Use 'size_t' instead of 'unsigned
  * long' to account for platforms such as Windows that use 32-bit 'unsigned

@@ -14,7 +14,11 @@
 
 #define MATCHFINDER_WINDOW_SIZE (1UL << MATCHFINDER_WINDOW_ORDER)
 
+#ifdef DEFLATE64
+typedef s32 mf_pos_t;
+#else
 typedef s16 mf_pos_t;
+#endif
 
 #define MATCHFINDER_INITVAL ((mf_pos_t)-MATCHFINDER_WINDOW_SIZE)
 
@@ -27,7 +31,7 @@ typedef s16 mf_pos_t;
 
 #undef matchfinder_init
 #undef matchfinder_rebase
-#ifdef _aligned_attribute
+#if defined(_aligned_attribute) && !defined(DEFLATE64)
 #  if defined(__arm__) || defined(__aarch64__)
 #    include "arm/matchfinder_impl.h"
 #  elif defined(__i386__) || defined(__x86_64__)
@@ -86,7 +90,7 @@ matchfinder_rebase(mf_pos_t *data, size_t size)
 	size_t num_entries = size / sizeof(*data);
 	size_t i;
 
-	if (MATCHFINDER_WINDOW_SIZE == 32768) {
+	if (MATCHFINDER_WINDOW_SIZE == 32768 && sizeof(mf_pos_t) == 2) {
 		/* Branchless version for 32768 byte windows.  If the value was
 		 * already negative, clear all bits except the sign bit; this
 		 * changes the value to -32768.  Otherwise, set the sign bit;
@@ -103,7 +107,7 @@ matchfinder_rebase(mf_pos_t *data, size_t size)
 
 	for (i = 0; i < num_entries; i++) {
 		if (data[i] >= 0)
-			data[i] -= (mf_pos_t)-MATCHFINDER_WINDOW_SIZE;
+			data[i] -= (mf_pos_t)MATCHFINDER_WINDOW_SIZE;
 		else
 			data[i] = (mf_pos_t)-MATCHFINDER_WINDOW_SIZE;
 	}

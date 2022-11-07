@@ -27,7 +27,9 @@ STATIC_LIB_OBJ =			\
 	  lib/utils.obj			\
 	  lib/x86/cpu_features.obj	\
 	  lib/zlib_compress.obj		\
-	  lib/zlib_decompress.obj
+	  lib/zlib_decompress.obj	\
+	  lib/gdeflate_compress.obj	\
+	  lib/gdeflate_decompress.obj
 
 SHARED_LIB_OBJ = $(STATIC_LIB_OBJ:.obj=.dllobj)
 

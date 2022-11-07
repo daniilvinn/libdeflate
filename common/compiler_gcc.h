@@ -199,3 +199,19 @@ typedef char  __v64qi __attribute__((__vector_size__(64)));
 #define bsr64(n)	(63 - __builtin_clzll(n))
 #define bsf32(n)	__builtin_ctz(n)
 #define bsf64(n)	__builtin_ctzll(n)
+
+/*
+ * Setup rotation macros similar to MSVS intrinsics.
+ * These should recognized by compilers.
+ */
+#ifndef _rotr16
+#define _rotr16(x,n)	((x>>n) + (x<<(16-n)))
+#endif
+
+#ifndef _rotr
+#define _rotr(x,n)	((x>>n) + (x<<(32-n)))
+#endif
+
+#ifndef _rotr64
+#define _rotr64(x,n)	((x>>n) + (x<<(64-n)))
+#endif

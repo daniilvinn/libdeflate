@@ -6,6 +6,7 @@ decompression.
 The supported formats are:
 
 - DEFLATE (raw)
+- NVIDIA GDEFLATE (raw)
 - zlib (a.k.a. DEFLATE with a zlib wrapper)
 - gzip (a.k.a. DEFLATE with a gzip wrapper)
 
@@ -283,3 +284,5 @@ real applications can use it as well.
 libdeflate is [MIT-licensed](COPYING).
 
 I am not aware of any patents or patent applications relevant to libdeflate.
+
+NVIDIA GDEFLATE changes are [Apache-2.0-licensed](COPYING).

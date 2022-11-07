@@ -24,6 +24,10 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
  *
+ *
+ * SPDX-FileCopyrightText: Copyright (c) 2020, 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * ---------------------------------------------------------------------------
  *
  * This is a highly optimized DEFLATE decompressor.  When compiled with gcc on
@@ -170,8 +174,14 @@ struct libdeflate_decompressor {
  *
  * 64-bit platforms have a significant advantage: they get a bigger bitbuffer
  * which they have to fill less often.
+ *
+ * For GDEFLATE the bitbuffer has to be at least 64-bits long.
  */
+#ifdef GDEFLATE
+typedef u64 bitbuf_t;
+#else
 typedef machine_word_t bitbuf_t;
+#endif
 
 /*
  * Number of bits the bitbuffer variable can hold.
@@ -489,7 +499,11 @@ static const u32 litlen_decode_results[DEFLATE_NUM_LITLEN_SYMS] = {
 	ENTRY(35 , 3) , ENTRY(43 , 3) , ENTRY(51 , 3) , ENTRY(59 , 3),
 	ENTRY(67 , 4) , ENTRY(83 , 4) , ENTRY(99 , 4) , ENTRY(115, 4),
 	ENTRY(131, 5) , ENTRY(163, 5) , ENTRY(195, 5) , ENTRY(227, 5),
+#ifndef DEFLATE64
 	ENTRY(258, 0) , ENTRY(258, 0) , ENTRY(258, 0) ,
+#else
+	ENTRY(3, 16)  , ENTRY(3, 16)  , ENTRY(3, 16) ,
+#endif
 #undef ENTRY
 };
 
@@ -903,7 +917,11 @@ typedef enum libdeflate_result (*decompress_func_t)
 #ifndef DEFAULT_IMPL
 #  define FUNCNAME deflate_decompress_default
 #  define ATTRIBUTES
-#  include "decompress_template.h"
+#  ifdef GDEFLATE
+#    include "gdeflate_decompress_template.h"
+#  else
+#    include "decompress_template.h"
+#  endif
 #  define DEFAULT_IMPL deflate_decompress_default
 #endif
 
@@ -936,6 +954,7 @@ dispatch(struct libdeflate_decompressor * restrict d,
 #  define decompress_impl DEFAULT_IMPL /* only one implementation, use it */
 #endif
 
+#ifndef HIDE_INTERFACE
 
 /*
  * This is the main DEFLATE decompression routine.  See libdeflate.h for the
@@ -998,3 +1017,5 @@ libdeflate_free_decompressor(struct libdeflate_decompressor *d)
 {
 	libdeflate_free(d);
 }
+
+#endif

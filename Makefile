@@ -14,6 +14,8 @@
 #
 # Define DISABLE_ZLIB to disable support for the zlib wrapper format.
 #
+# Define DISABLE_GDEFLATE to disable support for the gdeflate.
+#
 # Define PREFIX to override the installation prefix, like './configure --prefix'
 # in autotools-based projects (default: /usr/local)
 #
@@ -145,6 +147,7 @@ endif
 		echo 'DECOMPRESSION_ONLY=$(DECOMPRESSION_ONLY)';	\
 		echo 'DISABLE_GZIP=$(DISABLE_GZIP)';			\
 		echo 'DISABLE_ZLIB=$(DISABLE_ZLIB)';			\
+		echo 'DISABLE_GDEFLATE=$(DISABLE_GDEFLATE)';		\
 		echo 'FREESTANDING=$(FREESTANDING)';			\
 		echo 'CC=$(CC)';					\
 		echo 'CFLAGS=$(CFLAGS)';				\
@@ -190,6 +193,14 @@ ifndef DISABLE_GZIP
     LIB_SRC += lib/crc32.c lib/gzip_decompress.c
     ifndef DECOMPRESSION_ONLY
         LIB_SRC += lib/gzip_compress.c
+    endif
+endif
+
+DISABLE_GDEFLATE :=
+ifndef DISABLE_GDEFLATE
+    LIB_SRC += lib/gdeflate_decompress.c
+    ifndef DECOMPRESSION_ONLY
+        LIB_SRC += lib/gdeflate_compress.c
     endif
 endif
 
